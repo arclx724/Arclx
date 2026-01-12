@@ -8,25 +8,22 @@ import datetime
 import re
 from typing import Dict, Any, Union
 
-# --- 🛠️ FIX FOR TERMUX DNS ERROR ---
 import dns.resolver
 dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
 dns.resolver.default_resolver.nameservers = ['8.8.8.8']
 
-# --- LIBRARIES ---
 from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
 from aiogram.filters import Command, CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ContentType
 
-import motor.motor_asyncio  # Async MongoDB
-import aiohttp              # Async Requests
+import motor.motor_asyncio
+import aiohttp
 
 # ==========================================
-# ⚙️ CONFIGURATION (FIXED & FULL)
+# ⚙️ CONFIGURATION
 # ==========================================
-# Maine Full Token aur Full URL wapas restore kar diya hai
 API_TOKEN = '8238728169:AAF0oyGa5kBIrzfRP2v8AhJbfh2NIog23ds'
 MONGO_URL = "mongodb+srv://arclx724_db_user:arclx724_db_user@cluster0.czhpczm.mongodb.net/?appName=Cluster0"
 OWNER_ID = 8042205941
@@ -34,11 +31,9 @@ LOG_CHANNEL_ID = "@c4llli"
 SUPPORT_LINK = "https://t.me/BillieSupport"
 UPDATES_LINK = "https://t.me/c4llli"
 
-# --- 📝 LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- 🚀 ASYNC DATABASE & CACHE ---
 try:
     client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URL)
     db = client['GroupHelpClone']
@@ -53,17 +48,14 @@ except Exception as e:
     logger.critical(f"❌ DB Connection Failed: {e}")
     sys.exit(1)
 
-# ⚡ RAM CACHE SYSTEM
 SETTINGS_CACHE: Dict[int, Dict[str, Any]] = {}
 SUDO_CACHE = set()
 API_KEYS_CACHE = {"nsfw": [], "ai": []}
 
-# --- 🤖 BOT INIT ---
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
 dp = Dispatcher()
 START_TIME = time.time()
 
-# --- 🗺️ MAPS ---
 CMD_MAP = {
     "nobots": "adding spambots protection",
     "noevents": "join and left filter",
@@ -81,28 +73,20 @@ CMD_MAP = {
     "blacklist_active": "bad domains"
 }
 
-# ==========================================
-# 🛠️ HELPER FUNCTIONS (ASYNC & CACHED)
-# ==========================================
-
+# --- HELPER FUNCTIONS ---
 async def refresh_caches():
-    """Load Sudo & Keys into RAM on startup"""
     global SUDO_CACHE, API_KEYS_CACHE
     SUDO_CACHE.add(OWNER_ID)
     async for s in sudo_col.find({}):
         SUDO_CACHE.add(s['user_id'])
-    
     async for k in apikeys_col.find({}):
         API_KEYS_CACHE["nsfw"].append(k)
     async for k in aikeys_col.find({}):
         API_KEYS_CACHE["ai"].append(k)
-    
-    logger.info("🧠 Caches Refreshed (Sudo & APIs)")
+    logger.info("🧠 Caches Refreshed")
 
 async def get_settings(chat_id: int):
-    if chat_id in SETTINGS_CACHE:
-        return SETTINGS_CACHE[chat_id]
-    
+    if chat_id in SETTINGS_CACHE: return SETTINGS_CACHE[chat_id]
     data = await settings_col.find_one({"chat_id": chat_id})
     if not data: data = {}
     SETTINGS_CACHE[chat_id] = data
@@ -110,8 +94,7 @@ async def get_settings(chat_id: int):
 
 async def update_setting(chat_id: int, key: str, value: Any):
     await settings_col.update_one({"chat_id": chat_id}, {"$set": {key: value}}, upsert=True)
-    if chat_id not in SETTINGS_CACHE:
-        SETTINGS_CACHE[chat_id] = {}
+    if chat_id not in SETTINGS_CACHE: SETTINGS_CACHE[chat_id] = {}
     SETTINGS_CACHE[chat_id][key] = value
 
 async def is_sudo(user_id: int) -> bool:
@@ -122,55 +105,38 @@ async def is_admin(chat_id: int, user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(chat_id, user_id)
         return member.status in ['administrator', 'creator']
-    except:
-        return False
+    except: return False
 
 def escape_md(text):
     if not text: return ""
     return text.replace("*", "").replace("_", "").replace("`", "").replace("[", "")
 
-# ==========================================
-# 🧠 ASYNC API ENGINES
-# ==========================================
+# --- API ENGINES ---
 async def check_nsfw_async(file_url):
     keys = API_KEYS_CACHE["nsfw"]
     if not keys: return False, "No Keys"
-    
     async with aiohttp.ClientSession() as session:
         for key_data in keys:
             try:
-                params = {
-                    'models': 'nudity',
-                    'api_user': key_data['user'],
-                    'api_secret': key_data['secret'],
-                    'url': file_url
-                }
+                params = {'models': 'nudity', 'api_user': key_data['user'], 'api_secret': key_data['secret'], 'url': file_url}
                 async with session.get('https://api.sightengine.com/1.0/check.json', params=params) as resp:
                     result = await resp.json()
                     if result['status'] == 'success':
                         nudity = result.get('nudity', {})
-                        if (nudity.get('raw', 0) > 0.60) or (nudity.get('partial', 0) > 0.70):
-                            return True, "NSFW"
+                        if (nudity.get('raw', 0) > 0.60) or (nudity.get('partial', 0) > 0.70): return True, "NSFW"
                         return False, "Safe"
-            except Exception as e:
-                logger.error(f"NSFW API Error: {e}")
-                continue
+            except: continue
     return False, "Error"
 
 async def get_censored_text_async(text):
     keys = API_KEYS_CACHE["ai"]
     if not keys: return None
-    
     system_prompt = "You are a Content Filter. Detect Profanity/Abuse in English/Hindi/Hinglish. Reply 'SAFE' if none. If found, return text with ||badword||."
-    
     async with aiohttp.ClientSession() as session:
         for key_data in keys:
             try:
                 headers = {"Authorization": f"Bearer {key_data['key']}"}
-                payload = {
-                    "model": "google/gemini-2.0-flash-001",
-                    "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]
-                }
+                payload = {"model": "google/gemini-2.0-flash-001", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]}
                 async with session.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload) as resp:
                     if resp.status == 200:
                         data = await resp.json()
@@ -181,124 +147,123 @@ async def get_censored_text_async(text):
     return None
 
 # ==========================================
-# 👮‍♂️ COMMANDS
+# 🏁 HANDLERS (ORDER IS IMPORTANT!)
 # ==========================================
+
+# 1. Start Command (Sabse Pehle)
+@dp.message(CommandStart())
+async def start_command(message: types.Message):
+    if await gban_col.find_one({"user_id": message.from_user.id}): return
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Add to Group ➕", url=f"https://t.me/{(await bot.get_me()).username}?startgroup=true")],
+        [InlineKeyboardButton(text="Support", url=SUPPORT_LINK), InlineKeyboardButton(text="Updates", url=UPDATES_LINK)]
+    ])
+    caption = f"🔒 **Hello {escape_md(message.from_user.first_name)}!**\nI am a High-Performance Async Security Bot."
+    try: await message.answer_animation("https://files.catbox.moe/3drb22.gif", caption=caption, reply_markup=markup)
+    except: await message.answer(caption, reply_markup=markup)
+
+# 2. Sudo Commands
+@dp.message(Command("broadcast"))
+async def broadcast(message: types.Message):
+    if not await is_sudo(message.from_user.id): return
+    msg = message.text.replace("/broadcast", "").strip()
+    if not msg: return await message.reply("Message missing.")
+    chats = await settings_col.distinct("chat_id")
+    await message.reply(f"🚀 Broadcasting to {len(chats)} chats...")
+    for chat in chats:
+        try:
+            await bot.send_message(chat, msg)
+            await asyncio.sleep(0.05) 
+        except: pass
+    await message.reply("✅ Broadcast done.")
+
+@dp.message(Command("sudocommands"))
+async def sudo_help(message: types.Message):
+    if not await is_sudo(message.from_user.id): return
+    await message.reply("👑 **Sudo:**\n/gban, /ungban, /addsudo, /remsudo\n/addapi, /addai, /logger on/off\n/broadcast")
+
+# 3. Admin Commands
 @dp.message(Command("stat", "status"))
 async def status_command(message: types.Message):
     if not await is_admin(message.chat.id, message.from_user.id): return
-
     try:
         me = await bot.get_chat_member(message.chat.id, bot.id)
-        perms = f"{'✅' if me.status=='administrator' else '❌'} Administrator\n{'✅' if me.can_delete_messages else '❌'} Can delete messages\n{'✅' if me.can_restrict_members else '❌'} Can restrict members"
-    except: perms = "❓ Permissions Unknown"
-
+        perms = f"{'✅' if me.status=='administrator' else '❌'} Administrator"
+    except: perms = "❓ Unknown"
     st = await get_settings(message.chat.id)
     filter_list = ""
-    order = ["antiflood", "imagefilter", "noevents", "nolinks", "noforwards", "nolocations", "nocontacts", "nocommands", "nohashtags", "novoice", "nobots", "profanity"]
-    
+    order = ["antiflood", "imagefilter", "noevents", "nolinks", "noforwards", "profanity"]
     for key in order:
         icon = "✅" if st.get(key) else "▫️"
-        filter_list += f"{icon} {CMD_MAP.get(key, key).capitalize()} /{key.split('_')[0]}\n"
-
-    txt = f"**{escape_md((await bot.get_me()).first_name)}**\n{escape_md(message.chat.title)}, **bot status:**\n{perms}\n**Filters:**\n{filter_list}"
-    await message.reply(txt)
+        filter_list += f"{icon} {CMD_MAP.get(key, key).capitalize()} /{key}\n"
+    await message.reply(f"**{escape_md((await bot.get_me()).first_name)}**\n{escape_md(message.chat.title)}\n{perms}\n**Filters:**\n{filter_list}")
 
 @dp.message(Command("auth", "unauth", "ban", "unban", "mute", "unmute", "promote", "demote", "authlist", "unauthall"))
 async def admin_actions(message: types.Message):
     if not await is_admin(message.chat.id, message.from_user.id): return
-    
     cmd = message.text.split()[0].lower()
     chat = message.chat.id
-
+    
     if '/authlist' in cmd:
         st = await get_settings(chat)
-        if not st.get('auth_users'): return await message.reply("📂 **Auth List is Empty.**")
-        return await message.reply(f"🛡️ **Auth Users:** `{st['auth_users']}`")
+        return await message.reply(f"🛡️ **Auth Users:** `{st.get('auth_users', [])}`")
     
     if '/unauthall' in cmd:
-        try:
-            if (await bot.get_chat_member(chat, message.from_user.id)).status == 'creator' or await is_sudo(message.from_user.id):
-                await update_setting(chat, "auth_users", [])
-                return await message.reply("🗑️ **All Authorized users removed.**")
-        except: pass
-        return
+        await update_setting(chat, "auth_users", [])
+        return await message.reply("🗑️ All Auth users removed.")
 
     target = None
-    if message.reply_to_message:
-        target = message.reply_to_message.from_user
+    if message.reply_to_message: target = message.reply_to_message.from_user
     elif len(message.text.split()) > 1:
         arg = message.text.split()[1]
-        if arg.isdigit():
-            try: target = await bot.get_chat_member(chat, int(arg))
+        if arg.isdigit(): 
+            try: target = (await bot.get_chat_member(chat, int(arg))).user
             except: pass
-            if target: target = target.user
-        elif arg.startswith("@"):
-            await message.reply("⚠️ Username not supported directly. Reply or use ID.")
-            return
-
-    if not target:
-        return await message.reply("❌ **User not found.** Reply or use ID.")
-
-    uid = target.id
-    name = escape_md(target.first_name)
+    
+    if not target: return await message.reply("❌ User not found.")
+    uid, name = target.id, escape_md(target.first_name)
 
     try:
         if '/auth' in cmd:
             await settings_col.update_one({"chat_id": chat}, {"$addToSet": {"auth_users": uid}}, upsert=True)
             if chat in SETTINGS_CACHE: SETTINGS_CACHE[chat].setdefault('auth_users', []).append(uid)
-            await message.reply(f"✅ **Authorized:** {name}")
+            await message.reply(f"✅ Authorized: {name}")
         elif '/unauth' in cmd:
             await settings_col.update_one({"chat_id": chat}, {"$pull": {"auth_users": uid}})
             if chat in SETTINGS_CACHE and 'auth_users' in SETTINGS_CACHE[chat]: 
                 if uid in SETTINGS_CACHE[chat]['auth_users']: SETTINGS_CACHE[chat]['auth_users'].remove(uid)
-            await message.reply(f"🚫 **Un-Authorized:** {name}")
+            await message.reply(f"🚫 Un-Authorized: {name}")
         elif '/ban' in cmd:
             await bot.ban_chat_member(chat, uid)
-            await message.reply(f"🚫 **Banned:** {name}")
+            await message.reply(f"🚫 Banned: {name}")
         elif '/unban' in cmd:
             await bot.unban_chat_member(chat, uid, only_if_banned=True)
-            await message.reply(f"✅ **Unbanned:** {name}")
+            await message.reply(f"✅ Unbanned: {name}")
         elif '/mute' in cmd:
             await bot.restrict_chat_member(chat, uid, permissions=ChatPermissions(can_send_messages=False))
-            await message.reply(f"🔇 **Muted:** {name}")
+            await message.reply(f"🔇 Muted: {name}")
         elif '/unmute' in cmd:
-            await bot.restrict_chat_member(chat, uid, permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True))
-            await message.reply(f"🔊 **Unmuted:** {name}")
-        elif '/promote' in cmd:
-            await bot.promote_chat_member(chat, uid, can_invite_users=True, can_delete_messages=True, can_restrict_members=True)
-            await message.reply(f"✅ **Promoted:** {name}")
-        elif '/demote' in cmd:
-            await bot.promote_chat_member(chat, uid, is_anonymous=False)
-            await message.reply(f"⬇️ **Demoted:** {name}")
-    except Exception as e:
-        await message.reply(f"⚠️ Error: `{e}`")
+            await bot.restrict_chat_member(chat, uid, permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True))
+            await message.reply(f"🔊 Unmuted: {name}")
+    except Exception as e: await message.reply(f"⚠️ Error: {e}")
 
+# 4. Toggles
 @dp.message(F.text.startswith("/"))
 async def toggle_handler(message: types.Message):
     cmd = message.text.split()[0][1:]
-    if cmd not in CMD_MAP: return 
+    if cmd not in CMD_MAP: return # THIS LETS MAIN_FILTER RUN IF NOT A TOGGLE
     if not await is_admin(message.chat.id, message.from_user.id): return
-
-    args = message.text.split()
-    if len(args) < 2:
-        return await message.reply(f"Usage: `/{cmd} on` or `off`")
-
-    val = True if args[1].lower() == 'on' else False
+    val = True if 'on' in message.text.lower() else False
     await update_setting(message.chat.id, cmd, val)
-    
-    user = f"[{escape_md(message.from_user.first_name)}](tg://user?id={message.from_user.id})"
-    feat = CMD_MAP.get(cmd, cmd)
     status = "enabled" if val else "disabled"
-    icon = "✅" if val else ""
-    await message.reply(f"{user} | {escape_md(message.chat.title)}, {status} {feat} {icon}.")
+    await message.reply(f"{escape_md(message.chat.title)}, {status} {cmd}.")
 
-# ==========================================
-# 🛡️ MAIN FILTERS
-# ==========================================
+# 5. Main Filter (MUST BE LAST)
 @dp.message()
 async def main_filter(message: types.Message):
     if message.chat.type == 'private': return
     
+    # Check GBan
     if await gban_col.find_one({"user_id": message.from_user.id}):
         try: await bot.ban_chat_member(message.chat.id, message.from_user.id)
         except: pass
@@ -307,7 +272,7 @@ async def main_filter(message: types.Message):
     st = await get_settings(message.chat.id)
     is_auth = message.from_user.id in st.get('auth_users', [])
     is_adm = await is_admin(message.chat.id, message.from_user.id)
-    
+
     # NSFW
     if st.get('imagefilter') and message.content_type in [ContentType.PHOTO, ContentType.STICKER] and not is_adm:
         try:
@@ -317,15 +282,13 @@ async def main_filter(message: types.Message):
             is_nsfw, _ = await check_nsfw_async(file_url)
             if is_nsfw:
                 await message.delete()
-                temp = await message.answer("🚫 **NSFW Detected!**")
-                await asyncio.sleep(5)
-                await temp.delete()
+                t = await message.answer("🚫 NSFW Detected!")
+                await asyncio.sleep(5); await t.delete()
                 return
-        except Exception as e: logger.error(f"NSFW Check Fail: {e}")
+        except: pass
 
     # Text Filters
     txt = message.text or message.caption or ""
-    
     if st.get('nolinks') and not is_adm:
         if message.entities:
             for e in message.entities:
@@ -338,15 +301,10 @@ async def main_filter(message: types.Message):
         if censored:
             try:
                 await message.delete()
-                markup = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="➕ Add Me", url=f"https://t.me/{(await bot.get_me()).username}?startgroup=true"),
-                    InlineKeyboardButton(text="📢 Updates", url=UPDATES_LINK)
-                ]])
-                user_link = f"[{escape_md(message.from_user.first_name)}](tg://user?id={message.from_user.id})"
-                msg = f"🚫 Hey {user_link}, message removed.\n\n🔍 **Censored:**\n{censored}\n\nPlease be respectful."
+                markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📢 Updates", url=UPDATES_LINK)]])
+                msg = f"🚫 Hey {message.from_user.first_name}, message removed.\n\n🔍 **Censored:**\n{censored}"
                 sent = await message.answer(msg, reply_markup=markup)
-                await asyncio.sleep(30)
-                await sent.delete()
+                await asyncio.sleep(30); await sent.delete()
             except: pass
 
 @dp.message(F.new_chat_members)
@@ -356,54 +314,7 @@ async def on_join(message: types.Message):
             await start_command(message)
 
 # ==========================================
-# 👑 SUDO COMMANDS
-# ==========================================
-@dp.message(Command("broadcast"))
-async def broadcast(message: types.Message):
-    if not await is_sudo(message.from_user.id): return
-    msg = message.text.replace("/broadcast", "").strip()
-    if not msg: return await message.reply("Message missing.")
-    
-    chats = await settings_col.distinct("chat_id")
-    count = 0
-    await message.reply(f"🚀 Broadcasting to {len(chats)} chats...")
-    
-    for chat in chats:
-        try:
-            await bot.send_message(chat, msg)
-            count += 1
-            await asyncio.sleep(0.05) 
-        except: pass
-    await message.reply(f"✅ Broadcast done. Sent to {count} chats.")
-
-@dp.message(Command("sudocommands"))
-async def sudo_help(message: types.Message):
-    if not await is_sudo(message.from_user.id): return
-    text = """👑 **Sudo Commands:**
-`/gban <id> <reason>` - Global Ban
-`/ungban <id>` - Global Unban
-`/addsudo <id>` - Add new Sudo
-`/remsudo <id>` - Remove Sudo
-`/addapi <user> <secret>` - Add NSFW Key
-`/addai <key>` - Add OpenRouter Key
-`/logger on/off` - Log Channel
-`/broadcast <msg>` - Send Broadcast"""
-    await message.reply(text)
-
-@dp.message(CommandStart())
-async def start_command(message: types.Message):
-    if await gban_col.find_one({"user_id": message.from_user.id}): return
-    
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Add to Group ➕", url=f"https://t.me/{(await bot.get_me()).username}?startgroup=true")],
-        [InlineKeyboardButton(text="Support", url=SUPPORT_LINK), InlineKeyboardButton(text="Updates", url=UPDATES_LINK)]
-    ])
-    caption = f"🔒 **Hello {escape_md(message.from_user.first_name)}!**\nI am a High-Performance Async Security Bot."
-    try: await message.answer_animation("https://files.catbox.moe/3drb22.gif", caption=caption, reply_markup=markup)
-    except: await message.answer(caption, reply_markup=markup)
-
-# ==========================================
-# 🏁 MAIN ENTRY POINT
+# 🏁 RUN
 # ==========================================
 async def main():
     await refresh_caches()
@@ -411,7 +322,6 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot Stopped.")
+    try: asyncio.run(main())
+    except: logger.info("Bot Stopped.")
+        
