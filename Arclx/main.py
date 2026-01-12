@@ -26,9 +26,9 @@ import aiohttp              # Async Requests
 # ==========================================
 # ⚙️ CONFIGURATION (Yahan apna data daalo)
 # ==========================================
-API_TOKEN = 'YOUR_BOT_TOKEN_HERE'
-MONGO_URL = "YOUR_MONGO_URL_HERE"
-OWNER_ID = 1234567890  # Apna Telegram ID (Number)
+API_TOKEN = '8238728169:AAF0oyGa5kBIrzfRP2v8AhJb>
+MONGO_URL = "mongodb+srv://arclx724_db_user:arcl>
+OWNER_ID = 8042205941  # Apna Telegram ID (Number)
 LOG_CHANNEL_ID = "@c4llli" 
 SUPPORT_LINK = "https://t.me/BillieSupport"
 UPDATES_LINK = "https://t.me/c4llli"
