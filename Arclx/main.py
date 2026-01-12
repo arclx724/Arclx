@@ -8,6 +8,11 @@ import datetime
 import re
 from typing import Dict, Any, Union
 
+# --- 🛠️ FIX FOR TERMUX DNS ERROR (Sabse Upar) ---
+import dns.resolver
+dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+dns.resolver.default_resolver.nameservers = ['8.8.8.8']
+
 # --- LIBRARIES ---
 from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
 from aiogram.filters import Command, CommandStart
@@ -18,15 +23,17 @@ from aiogram.enums import ParseMode, ContentType
 import motor.motor_asyncio  # Async MongoDB
 import aiohttp              # Async Requests
 
-# --- 🛠️ CONFIGURATION ---
-API_TOKEN = '8238728169:AAF0oyGa5kBIrzfRP2v8AhJbfh2NIog23ds'
-MONGO_URL = "mongodb+srv://arclx724_db_user:arclx724_db_user@cluster0.czhpczm.mongodb.net/?appName=Cluster0"
-OWNER_ID = 8042205941 
+# ==========================================
+# ⚙️ CONFIGURATION (Yahan apna data daalo)
+# ==========================================
+API_TOKEN = 'YOUR_BOT_TOKEN_HERE'
+MONGO_URL = "YOUR_MONGO_URL_HERE"
+OWNER_ID = 1234567890  # Apna Telegram ID (Number)
 LOG_CHANNEL_ID = "@c4llli" 
 SUPPORT_LINK = "https://t.me/BillieSupport"
 UPDATES_LINK = "https://t.me/c4llli"
 
-# --- 📝 LOGGING SETUP (Better Error Handling) ---
+# --- 📝 LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -211,10 +218,28 @@ async def status_command(message: types.Message):
     txt = f"**{escape_md((await bot.get_me()).first_name)}**\n{escape_md(message.chat.title)}, **bot status:**\n{perms}\n**Filters:**\n{filter_list}"
     await message.reply(txt)
 
-@dp.message(Command("auth", "unauth", "ban", "unban", "mute", "unmute", "promote", "demote"))
+@dp.message(Command("auth", "unauth", "ban", "unban", "mute", "unmute", "promote", "demote", "authlist", "unauthall"))
 async def admin_actions(message: types.Message):
     if not await is_admin(message.chat.id, message.from_user.id): return
     
+    cmd = message.text.split()[0].lower()
+    chat = message.chat.id
+
+    # Handle Authlist/Unauthall
+    if '/authlist' in cmd:
+        st = await get_settings(chat)
+        if not st.get('auth_users'): return await message.reply("📂 **Auth List is Empty.**")
+        return await message.reply(f"🛡️ **Auth Users:** `{st['auth_users']}`")
+    
+    if '/unauthall' in cmd:
+        # Check creator
+        try:
+            if (await bot.get_chat_member(chat, message.from_user.id)).status == 'creator' or await is_sudo(message.from_user.id):
+                await update_setting(chat, "auth_users", [])
+                return await message.reply("🗑️ **All Authorized users removed.**")
+        except: pass
+        return
+
     # Resolve Target (Async way)
     target = None
     if message.reply_to_message:
@@ -222,26 +247,25 @@ async def admin_actions(message: types.Message):
     elif len(message.text.split()) > 1:
         arg = message.text.split()[1]
         if arg.isdigit():
-            try: target = await bot.get_chat_member(message.chat.id, int(arg))
+            try: target = await bot.get_chat_member(chat, int(arg))
             except: pass
             if target: target = target.user
         elif arg.startswith("@"):
-            # Note: bot.get_chat is safer for usernames
-            try: target = await bot.get_chat(arg)
+            try: 
+                # aiogram me direct user object nahi milta bina interaction ke, so we warn
+                await message.reply("⚠️ Username not supported directly. Please Reply to user or use ID.")
+                return
             except: pass
 
     if not target:
-        return await message.reply("❌ **User not found.** Reply or use ID/@.")
+        return await message.reply("❌ **User not found.** Reply or use ID.")
 
     uid = target.id
     name = escape_md(target.first_name)
-    chat = message.chat.id
-    cmd = message.text.split()[0].lower()
 
     try:
         if '/auth' in cmd:
             await settings_col.update_one({"chat_id": chat}, {"$addToSet": {"auth_users": uid}}, upsert=True)
-            # Update Cache
             if chat in SETTINGS_CACHE: SETTINGS_CACHE[chat].setdefault('auth_users', []).append(uid)
             await message.reply(f"✅ **Authorized:** {name}")
 
@@ -264,8 +288,16 @@ async def admin_actions(message: types.Message):
             await message.reply(f"🔇 **Muted:** {name}")
 
         elif '/unmute' in cmd:
-            await bot.restrict_chat_member(chat, uid, permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True))
+            await bot.restrict_chat_member(chat, uid, permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True))
             await message.reply(f"🔊 **Unmuted:** {name}")
+            
+        elif '/promote' in cmd:
+            await bot.promote_chat_member(chat, uid, can_invite_users=True, can_delete_messages=True, can_restrict_members=True)
+            await message.reply(f"✅ **Promoted:** {name}")
+            
+        elif '/demote' in cmd:
+            await bot.promote_chat_member(chat, uid, is_anonymous=False)
+            await message.reply(f"⬇️ **Demoted:** {name}")
 
     except Exception as e:
         await message.reply(f"⚠️ Error: `{e}`")
@@ -273,9 +305,8 @@ async def admin_actions(message: types.Message):
 # --- ⚙️ TOGGLES ---
 @dp.message(F.text.startswith("/"))
 async def toggle_handler(message: types.Message):
-    # Basic check for toggle commands
     cmd = message.text.split()[0][1:]
-    if cmd not in CMD_MAP: return # Ignore non-toggle cmds
+    if cmd not in CMD_MAP: return 
     
     if not await is_admin(message.chat.id, message.from_user.id): return
 
@@ -300,22 +331,21 @@ async def toggle_handler(message: types.Message):
 async def main_filter(message: types.Message):
     if message.chat.type == 'private': return
     
-    # 1. GBan Check (Fastest - RAM Cache if implemented properly, here DB for safety)
+    # 1. GBan Check
     if await gban_col.find_one({"user_id": message.from_user.id}):
         try: await bot.ban_chat_member(message.chat.id, message.from_user.id)
         except: pass
         return
 
-    # 2. Get Settings (RAM)
+    # 2. Get Settings
     st = await get_settings(message.chat.id)
     
     # 3. Immunity Check
     is_auth = message.from_user.id in st.get('auth_users', [])
     is_adm = await is_admin(message.chat.id, message.from_user.id)
     
-    # --- NSFW FILTER ---
+    # --- NSFW FILTER (Auth Checks Applied) ---
     if st.get('imagefilter') and message.content_type in [ContentType.PHOTO, ContentType.STICKER] and not is_adm:
-        # Get File URL logic
         try:
             file_id = message.photo[-1].file_id if message.photo else message.sticker.file_id
             file = await bot.get_file(file_id)
@@ -333,7 +363,7 @@ async def main_filter(message: types.Message):
     # --- TEXT FILTERS ---
     txt = message.text or message.caption or ""
     
-    # Links
+    # Links (Auth Checks Applied)
     if st.get('nolinks') and not is_adm:
         if message.entities:
             for e in message.entities:
@@ -382,10 +412,25 @@ async def broadcast(message: types.Message):
         try:
             await bot.send_message(chat, msg)
             count += 1
-            await asyncio.sleep(0.05) # Flood prevention
+            await asyncio.sleep(0.05) 
         except: pass
     
     await message.reply(f"✅ Broadcast done. Sent to {count} chats.")
+
+# --- SUDO COMMANDS MENU ---
+@dp.message(Command("sudocommands"))
+async def sudo_help(message: types.Message):
+    if not await is_sudo(message.from_user.id): return
+    text = """👑 **Sudo Commands List:**
+`/gban <id> <reason>` - Global Ban
+`/ungban <id>` - Global Unban
+`/addsudo <id>` - Add new Sudo
+`/remsudo <id>` - Remove Sudo
+`/addapi <user> <secret>` - Add NSFW Key
+`/addai <key>` - Add OpenRouter Key
+`/logger on/off` - Log Channel
+`/broadcast <msg>` - Send Broadcast"""
+    await message.reply(text)
 
 # --- START ---
 @dp.message(CommandStart())
